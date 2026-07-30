@@ -123,6 +123,12 @@
   .tx .amt.expense{color:var(--wax);}
   .tx .amt.income{color:var(--green);}
   .tx .amt.transfer{color:var(--copper);}
+  .paid-chip{
+    font-size:10.5px;font-weight:600;padding:2px 9px;border-radius:20px;
+    border:1px solid transparent;cursor:pointer;
+  }
+  .paid-chip.paid{background:var(--green-soft);color:var(--green);}
+  .paid-chip.unpaid{background:var(--wax-soft);color:var(--wax);}
   .day-group-label{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-soft);margin:14px 0 2px;}
   .day-group-label:first-child{margin-top:0;}
 
@@ -197,7 +203,7 @@
     <h1 id="greeting">Ledger</h1>
     <div class="tally-row">
       <div class="tally-card">
-        <div class="label">Cycle spend</div>
+        <div class="label">Month spend</div>
         <div class="value copper num" id="cycleSpend">—</div>
       </div>
       <div class="tally-card">
@@ -221,7 +227,7 @@
           <div class="t"><div class="label">CC owed</div><div class="value num" id="ovCCOwed" style="color:var(--wax);">Rp 0</div></div>
           <div class="t"><div class="label">Net</div><div class="value num" id="ovNet">Rp 0</div></div>
         </div>
-        <div class="settings-line" style="margin-top:14px;">This cycle <span id="cycleRangeLabel">—</span></div>
+        <div class="settings-line" style="margin-top:14px;">This month <span id="cycleRangeLabel">—</span></div>
         <div class="row" style="justify-content:space-between;margin-top:6px;">
           <div><div style="font-size:11px;color:var(--ink-soft);text-transform:uppercase;">Income</div>
             <div class="num" style="font-size:16px;font-weight:600;color:var(--green);" id="ovIncome">Rp 0</div></div>
@@ -251,7 +257,7 @@
           <button type="button" data-kind="transfer">Transfer</button>
         </div>
         <div class="row">
-          <input type="number" inputmode="numeric" step="1" id="txAmount" class="num-input" placeholder="Amount (IDR)" />
+          <input type="text" inputmode="numeric" id="txAmount" class="num-input money-input" placeholder="Amount (IDR)" />
           <input type="date" id="txDate" />
         </div>
         <div class="row">
@@ -276,10 +282,15 @@
       </div>
 
       <div class="card">
-        <h2>Billing cycle<span class="sub">Cycle resets on this day each month</span></h2>
+        <h2>Credit card cycle<span class="sub">Separate from your monthly spend — this tracks the card's billing cycle</span></h2>
         <div class="settings-line">
           <span>Cycle start day</span>
           <input type="number" min="1" max="28" id="cycleStartDay" />
+        </div>
+        <div class="settings-line"><span id="ccCycleRangeLabel">—</span></div>
+        <div class="totals-strip" style="margin-top:8px;">
+          <div class="t"><div class="label">Charged this cycle</div><div class="value num" id="ccCycleSpend">Rp 0</div></div>
+          <div class="t"><div class="label">Unpaid</div><div class="value num" id="ccUnpaid" style="color:var(--wax);">Rp 0</div></div>
         </div>
       </div>
 
@@ -404,6 +415,25 @@ function cycleRange(refDate, startDay){
   const end = new Date(start.getFullYear(), start.getMonth() + 1, startDay - 1);
   return { start, end };
 }
+function monthRange(refDate){
+  const start = new Date(refDate.getFullYear(), refDate.getMonth(), 1);
+  const end = new Date(refDate.getFullYear(), refDate.getMonth() + 1, 0);
+  return { start, end };
+}
+function parseMoneyInput(str){
+  const digits = String(str).replace(/[^0-9]/g,'');
+  return digits ? parseInt(digits, 10) : 0;
+}
+function formatMoneyInputValue(n){
+  const num = Math.round(Number(n) || 0);
+  return num ? num.toLocaleString('en-US') : '';
+}
+function attachLiveMoneyFormatting(el){
+  el.addEventListener('input', () => {
+    const digits = el.value.replace(/[^0-9]/g,'');
+    el.value = digits ? parseInt(digits,10).toLocaleString('en-US') : '';
+  });
+}
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -455,14 +485,13 @@ function renderHeader(){
   document.getElementById('todayDate').textContent = now.toLocaleDateString(undefined,{ weekday:'long', month:'long', day:'numeric' });
   document.getElementById('greeting').textContent = 'Ledger';
 
-  const startDay = state.settings.cycleStartDay || 27;
-  const { start, end } = cycleRange(now, startDay);
-  const daysLeft = daysBetween(now, end) + 1;
+  const { start: mStart, end: mEnd } = monthRange(now);
+  const daysLeft = daysBetween(now, mEnd) + 1;
   document.getElementById('cycleDaysLeft').textContent = Math.max(daysLeft,0);
 
   const spend = state.tx.filter(t => {
     const d = new Date(t.date + 'T00:00:00');
-    return t.kind === 'expense' && d >= start && d <= end;
+    return t.kind === 'expense' && d >= mStart && d <= mEnd;
   }).reduce((s,t)=>s+t.amount,0);
   document.getElementById('cycleSpend').textContent = fmtMoney(spend);
 
@@ -470,23 +499,36 @@ function renderHeader(){
   document.getElementById('habitsToday').textContent = doneToday + '/' + state.habits.length;
 
   document.getElementById('cycleRangeLabel').textContent =
-    start.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' – ' +
-    end.toLocaleDateString(undefined,{month:'short',day:'numeric'});
+    mStart.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' – ' +
+    mEnd.toLocaleDateString(undefined,{month:'short',day:'numeric'});
 }
 
 /* ---------------- overview ---------------- */
 function renderOverview(){
   const now = new Date();
-  const startDay = state.settings.cycleStartDay || 27;
-  const { start, end } = cycleRange(now, startDay);
-  const inCycle = state.tx.filter(t => {
+  const { start, end } = monthRange(now);
+  const inMonth = state.tx.filter(t => {
     const d = new Date(t.date + 'T00:00:00');
     return d >= start && d <= end;
   });
-  const income = inCycle.filter(t=>t.kind==='income').reduce((s,t)=>s+t.amount,0);
-  const expense = inCycle.filter(t=>t.kind==='expense').reduce((s,t)=>s+t.amount,0);
+  const income = inMonth.filter(t=>t.kind==='income').reduce((s,t)=>s+t.amount,0);
+  const expense = inMonth.filter(t=>t.kind==='expense').reduce((s,t)=>s+t.amount,0);
   document.getElementById('ovIncome').textContent = fmtMoney(income);
   document.getElementById('ovExpense').textContent = fmtMoney(expense);
+
+  const startDay = state.settings.cycleStartDay || 27;
+  const cc = cycleRange(now, startDay);
+  const ccSpend = state.tx.filter(t => {
+    const d = new Date(t.date + 'T00:00:00');
+    return t.kind === 'expense' && t.accountId === 'credit-card' && d >= cc.start && d <= cc.end;
+  }).reduce((s,t)=>s+t.amount,0);
+  const ccUnpaid = state.tx.filter(t => t.kind === 'expense' && t.accountId === 'credit-card' && !t.paid)
+    .reduce((s,t)=>s+t.amount,0);
+  document.getElementById('ccCycleRangeLabel').textContent =
+    cc.start.toLocaleDateString(undefined,{month:'short',day:'numeric'}) + ' – ' +
+    cc.end.toLocaleDateString(undefined,{month:'short',day:'numeric'});
+  document.getElementById('ccCycleSpend').textContent = fmtMoney(ccSpend);
+  document.getElementById('ccUnpaid').textContent = fmtMoney(ccUnpaid);
 
   const cashTotal = state.accounts.filter(a=>!a.isCredit).reduce((s,a)=>s+accountBalance(a),0);
   const ccOwed = state.accounts.filter(a=>a.isCredit).reduce((s,a)=>s+accountBalance(a),0);
@@ -538,8 +580,10 @@ document.getElementById('txKindSeg').addEventListener('click', e => {
   document.getElementById('txWho').style.display = currentTxKind === 'expense' ? '' : 'none';
 });
 
+attachLiveMoneyFormatting(document.getElementById('txAmount'));
+
 document.getElementById('txAdd').addEventListener('click', () => {
-  const amount = parseFloat(document.getElementById('txAmount').value);
+  const amount = parseMoneyInput(document.getElementById('txAmount').value);
   const date = document.getElementById('txDate').value || todayISO();
   const accountId = document.getElementById('txAccount').value;
   const toAccountId = document.getElementById('txToAccount').value;
@@ -555,6 +599,7 @@ document.getElementById('txAdd').addEventListener('click', () => {
   } else {
     tx.category = category;
     if (currentTxKind === 'expense') tx.who = who;
+    if (currentTxKind === 'expense' && accountId === 'credit-card') tx.paid = false;
   }
   state.tx.unshift(tx);
   persist();
@@ -569,23 +614,34 @@ function renderAccounts(){
     const bal = accountBalance(a);
     const cls = a.isCredit ? (bal > 0 ? 'owed' : 'positive') : (bal >= 0 ? 'positive' : 'owed');
     const label = a.isCredit ? ' owed' : '';
+    const unpaidNote = a.id === 'credit-card'
+      ? (() => {
+          const u = state.tx.filter(t => t.kind==='expense' && t.accountId==='credit-card' && !t.paid).reduce((s,t)=>s+t.amount,0);
+          return u > 0 ? `<div style="font-size:11px;color:var(--wax);text-align:right;margin-top:2px;">${fmtMoney(u)} unpaid</div>` : '';
+        })()
+      : '';
     return `
     <div class="acct-edit-row">
       <div class="name">${escapeHtml(a.name)}${a.isCredit ? '<span class="tag">Credit</span>' : ''}</div>
-      <div class="bal ${cls}">${fmtMoney(bal)}${label}</div>
+      <div><div class="bal ${cls}">${fmtMoney(bal)}${label}</div>${unpaidNote}</div>
     </div>
     <div class="acct-start-line">
       <span>Starting balance</span>
-      <input type="number" class="num-input" data-acct-start="${a.id}" value="${a.startingBalance}" />
+      <input type="text" inputmode="numeric" class="num-input money-input" data-acct-start="${a.id}" value="${formatMoneyInputValue(a.startingBalance)}" />
     </div>`;
   }).join('');
 }
+document.getElementById('acctList').addEventListener('input', e => {
+  if (e.target.matches('.money-input')){
+    const digits = e.target.value.replace(/[^0-9]/g,'');
+    e.target.value = digits ? parseInt(digits,10).toLocaleString('en-US') : '';
+  }
+});
 document.getElementById('acctList').addEventListener('change', e => {
   const id = e.target.dataset.acctStart;
   if (!id) return;
   const acct = accountById(id);
-  const v = parseFloat(e.target.value);
-  acct.startingBalance = isNaN(v) ? 0 : v;
+  acct.startingBalance = parseMoneyInput(e.target.value);
   persist(); renderAll();
 });
 
@@ -611,6 +667,10 @@ function renderFinance(){
       amtLabel = (t.kind === 'expense' ? '-' : '+') + fmtMoney(t.amount);
       amtCls = t.kind;
     }
+    const showPaidChip = t.kind === 'expense' && t.accountId === 'credit-card';
+    const paidChip = showPaidChip
+      ? `<button class="paid-chip ${t.paid ? 'paid' : 'unpaid'}" data-toggle-paid="${t.id}">${t.paid ? 'Paid' : 'Unpaid'}</button>`
+      : '';
     html += `
       <div class="tx">
         <div class="meta">
@@ -620,6 +680,7 @@ function renderFinance(){
         </div>
         <div class="right">
           <div class="amt num ${amtCls}">${amtLabel}</div>
+          ${paidChip}
           <button class="btn-icon" data-del-tx="${t.id}" aria-label="Delete">✕</button>
         </div>
       </div>`;
@@ -627,9 +688,16 @@ function renderFinance(){
   list.innerHTML = html;
 }
 document.getElementById('txList').addEventListener('click', e => {
-  const id = e.target.closest('[data-del-tx]')?.dataset.delTx;
-  if (!id) return;
-  state.tx = state.tx.filter(t => t.id !== id);
+  const delId = e.target.closest('[data-del-tx]')?.dataset.delTx;
+  const paidId = e.target.closest('[data-toggle-paid]')?.dataset.togglePaid;
+  if (paidId){
+    const t = state.tx.find(x => x.id === paidId);
+    if (t) t.paid = !t.paid;
+    persist(); renderAll();
+    return;
+  }
+  if (!delId) return;
+  state.tx = state.tx.filter(t => t.id !== delId);
   persist(); renderAll();
 });
 
