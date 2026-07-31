@@ -241,6 +241,38 @@
           <button class="btn-primary" id="exportBtn" style="white-space:nowrap;">Download</button>
         </div>
       </div>
+
+      <div class="card">
+        <div class="row" style="justify-content:space-between;">
+          <h2 style="margin-bottom:0;">Manage accounts<span class="sub">Add, rename, or remove accounts</span></h2>
+          <button class="btn-icon" id="mngAcctToggle" aria-label="Show or hide" style="font-size:20px;">▸</button>
+        </div>
+        <div id="mngAcctBody" style="margin-top:12px;">
+          <div id="mngAcctList"></div>
+          <div class="row" style="margin-top:12px;">
+            <input type="text" id="newAcctName" placeholder="New account name" />
+            <select id="newAcctType" style="max-width:110px;">
+              <option value="cash">Cash</option>
+              <option value="credit">Credit</option>
+            </select>
+            <button class="btn-primary" id="newAcctAdd">Add</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row" style="justify-content:space-between;">
+          <h2 style="margin-bottom:0;">Manage categories<span class="sub">Add, rename, or remove categories</span></h2>
+          <button class="btn-icon" id="mngCatToggle" aria-label="Show or hide" style="font-size:20px;">▸</button>
+        </div>
+        <div id="mngCatBody" style="margin-top:12px;">
+          <div id="mngCatList"></div>
+          <div class="row" style="margin-top:12px;">
+            <input type="text" id="newCatName" placeholder="New category name" />
+            <button class="btn-primary" id="newCatAdd">Add</button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- FINANCE -->
@@ -394,7 +426,7 @@
 
 <script>
 /* ---------------- constants ---------------- */
-const CATEGORIES = ['Food','Shopping','Entertainment','Fees','Give/Treat','Saving','Transport','Fix Fee','Adhoc','Others'];
+const DEFAULT_CATEGORIES = ['Food','Shopping','Entertainment','Fees','Give/Treat','Saving','Transport','Fix Fee','Adhoc','Others'];
 const WHO_OPTIONS = ['Me','Together','Split Bill'];
 const DEFAULT_ACCOUNTS = [
   { id:'seabank', name:'Seabank', isCredit:false, startingBalance:7648530 },
@@ -409,7 +441,7 @@ const DEFAULT_ACCOUNTS = [
 ];
 
 /* ---------------- storage ---------------- */
-const DB_KEYS = { tx:'ledger:tx', habits:'ledger:habits', projects:'ledger:projects', settings:'ledger:settings', accounts:'ledger:accounts' };
+const DB_KEYS = { tx:'ledger:tx', habits:'ledger:habits', projects:'ledger:projects', settings:'ledger:settings', accounts:'ledger:accounts', categories:'ledger:categories' };
 function load(key, fallback){
   try{ const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
   catch(e){ return fallback; }
@@ -422,7 +454,8 @@ let state = {
   habits: load(DB_KEYS.habits, []),
   projects: load(DB_KEYS.projects, []),
   settings: load(DB_KEYS.settings, { cycleStartDay: 27, accountsCollapsed: false, togetherBudget: 4000000, balanceHidden: false, txListCollapsed: false, togetherListCollapsed: false, splitListCollapsed: false, meListCollapsed: false, catCollapsed: false }),
-  accounts: load(DB_KEYS.accounts, DEFAULT_ACCOUNTS.map(a => ({...a})))
+  accounts: load(DB_KEYS.accounts, DEFAULT_ACCOUNTS.map(a => ({...a}))),
+  categories: load(DB_KEYS.categories, [...DEFAULT_CATEGORIES])
 };
 if (state.settings.accountsCollapsed === undefined) state.settings.accountsCollapsed = false;
 if (state.settings.togetherBudget === undefined) state.settings.togetherBudget = 4000000;
@@ -432,6 +465,8 @@ if (state.settings.togetherListCollapsed === undefined) state.settings.togetherL
 if (state.settings.splitListCollapsed === undefined) state.settings.splitListCollapsed = false;
 if (state.settings.meListCollapsed === undefined) state.settings.meListCollapsed = false;
 if (state.settings.catCollapsed === undefined) state.settings.catCollapsed = false;
+if (state.settings.mngAcctCollapsed === undefined) state.settings.mngAcctCollapsed = true;
+if (state.settings.mngCatCollapsed === undefined) state.settings.mngCatCollapsed = true;
 if (!state.accounts.some(a => a.id === 'deposit-wallet')){
   const ccIdx = state.accounts.findIndex(a => a.id === 'credit-card');
   const depositAcct = { id:'deposit-wallet', name:'Deposit Wallet', isCredit:false, startingBalance:0 };
@@ -444,6 +479,7 @@ function persist(){
   save(DB_KEYS.projects, state.projects);
   save(DB_KEYS.settings, state.settings);
   save(DB_KEYS.accounts, state.accounts);
+  save(DB_KEYS.categories, state.categories);
 }
 
 /* ---------------- helpers ---------------- */
@@ -527,6 +563,9 @@ function accountBalance(acct){
     if (acct.id === 'deposit-wallet' && t.kind === 'expense' && t.accountId === 'credit-card' && t.paid && Array.isArray(t.paidSplits)){
       bal += t.paidSplits.reduce((s, sp) => s + (sp.amount || 0), 0);
     }
+    if (acct.id === 'deposit-wallet' && t.kind === 'expense' && t.who === 'Split Bill' && t.myPartPaid && Array.isArray(t.myPartSplits)){
+      bal += t.myPartSplits.reduce((s, sp) => s + (sp.amount || 0), 0);
+    }
   });
   return bal;
 }
@@ -549,6 +588,9 @@ function monthlyAccountFlow(acct){
     if (acct.id === 'deposit-wallet' && t.kind === 'expense' && t.accountId === 'credit-card' && t.paid && Array.isArray(t.paidSplits)){
       delta += t.paidSplits.reduce((s, sp) => s + (sp.amount || 0), 0);
     }
+    if (acct.id === 'deposit-wallet' && t.kind === 'expense' && t.who === 'Split Bill' && t.myPartPaid && Array.isArray(t.myPartSplits)){
+      delta += t.myPartSplits.reduce((s, sp) => s + (sp.amount || 0), 0);
+    }
     if (!delta) return;
     if (d < start){ begin += delta; }
     else if (d <= end){ if (delta > 0) inflow += delta; else outflow += -delta; }
@@ -557,16 +599,16 @@ function monthlyAccountFlow(acct){
 }
 
 function splitBillMyPart(t){
-  return (t.myPart != null) ? t.myPart : t.amount;
+  return (t.myPart != null) ? t.myPart : 0;
 }
 function splitBillCounted(t){
-  // A split bill's "my part" only counts toward budgets/categories once marked part-paid
-  return t.who === 'Split Bill' ? (t.myPartPaid ? splitBillMyPart(t) : 0) : t.amount;
+  // A split bill counts at "my part" — that portion is my own spending
+  return t.who === 'Split Bill' ? splitBillMyPart(t) : t.amount;
 }
 function computeCategoryTotals(){
   const { start, end } = monthRange(new Date());
   const totals = {};
-  CATEGORIES.forEach(c => totals[c] = 0);
+  state.categories.forEach(c => totals[c] = 0);
   state.tx.forEach(t => {
     if (t.kind !== 'expense') return;
     const d = new Date(t.date + 'T00:00:00');
@@ -591,7 +633,7 @@ tabs.forEach(btn => btn.addEventListener('click', () => {
 /* ---------------- populate static selects ---------------- */
 function populateSelects(){
   const catSel = document.getElementById('txCategory');
-  catSel.innerHTML = CATEGORIES.map(c => `<option value="${c}">${c}</option>`).join('');
+  catSel.innerHTML = state.categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
   const whoSel = document.getElementById('txWho');
   whoSel.innerHTML = WHO_OPTIONS.map(w => `<option value="${w}">${w}</option>`).join('');
   const acctSel = document.getElementById('txAccount');
@@ -605,6 +647,8 @@ setupCollapsible('txListToggle', 'txList', 'txListCollapsed');
 setupCollapsible('togetherListToggle', 'togetherList', 'togetherListCollapsed');
 setupCollapsible('splitListToggle', 'splitBillList', 'splitListCollapsed');
 setupCollapsible('meListToggle', 'meList', 'meListCollapsed');
+setupCollapsible('mngAcctToggle', 'mngAcctBody', 'mngAcctCollapsed');
+setupCollapsible('mngCatToggle', 'mngCatBody', 'mngCatCollapsed');
 document.getElementById('balanceToggle').addEventListener('click', () => {
   state.settings.balanceHidden = !state.settings.balanceHidden;
   persist(); renderAll();
@@ -722,7 +766,7 @@ document.getElementById('txAdd').addEventListener('click', () => {
     if (currentTxKind === 'expense' && accountId === 'credit-card') tx.paid = false;
     if (currentTxKind === 'expense' && who === 'Split Bill'){
       tx.settled = false;
-      tx.myPart = amount;
+      tx.myPart = 0;
       tx.myPartTag = 'Me';
       tx.myPartPaid = false;
     }
@@ -776,7 +820,8 @@ function renderCategorySummary(){
   const list = document.getElementById('catList');
   list.style.display = collapsed ? 'none' : '';
   document.getElementById('catToggle').textContent = collapsed ? '▸' : '▾';
-  const sorted = [...CATEGORIES].sort((a,b) => (totals[b]||0) - (totals[a]||0));
+  const names = new Set([...state.categories, ...Object.keys(totals)]);
+  const sorted = [...names].sort((a,b) => (totals[b]||0) - (totals[a]||0));
   list.innerHTML = sorted.map(c => `
     <div class="acct-edit-row">
       <div class="name">${c}</div>
@@ -807,21 +852,30 @@ document.getElementById('acctList').addEventListener('change', e => {
 function renderDepositWallet(){
   const depositAcct = accountById('deposit-wallet');
   document.getElementById('depositBalance').textContent = fmtMoney(accountBalance(depositAcct));
-  const entries = state.tx.filter(t => t.kind === 'expense' && t.accountId === 'credit-card' && t.paid && Array.isArray(t.paidSplits) && t.paidSplits.length);
+  const entries = [];
+  state.tx.forEach(t => {
+    if (t.kind !== 'expense') return;
+    if (t.accountId === 'credit-card' && t.paid && Array.isArray(t.paidSplits) && t.paidSplits.length){
+      entries.push({ tx: t, splits: t.paidSplits, label: t.category || 'Credit card' });
+    }
+    if (t.who === 'Split Bill' && t.myPartPaid && Array.isArray(t.myPartSplits) && t.myPartSplits.length){
+      entries.push({ tx: t, splits: t.myPartSplits, label: (t.category || 'Split bill') + ' — my part' });
+    }
+  });
   const log = document.getElementById('depositLog');
   if (!entries.length){ log.innerHTML = `<div class="empty">No reimbursements recorded yet.</div>`; return; }
-  const sorted = [...entries].sort((a,b) => b.date.localeCompare(a.date));
-  log.innerHTML = sorted.map(t => {
-    const total = t.paidSplits.reduce((s,sp)=>s+sp.amount,0);
-    const breakdown = t.paidSplits.map(sp => {
+  entries.sort((a,b) => b.tx.date.localeCompare(a.tx.date));
+  log.innerHTML = entries.map(e => {
+    const total = e.splits.reduce((s,sp)=>s+sp.amount,0);
+    const breakdown = e.splits.map(sp => {
       const acct = accountById(sp.accountId);
       return `${acct ? escapeHtml(acct.name) : ''} ${fmtMoney(sp.amount)}`;
     }).join(' · ');
     return `
       <div class="tx" style="align-items:flex-start;">
         <div class="meta">
-          <div class="cat">${escapeHtml(t.category || 'Credit card')}</div>
-          <div class="acct">${fmtDateLabel(t.date)}</div>
+          <div class="cat">${escapeHtml(e.label)}</div>
+          <div class="acct">${fmtDateLabel(e.tx.date)}</div>
           <div class="date-note">${breakdown}</div>
         </div>
         <div class="right">
@@ -857,7 +911,7 @@ function paidEditorHtml(t){
   const totalEntered = paidEditorSplits.reduce((s,sp)=>s+(sp.amount||0),0);
   const diff = t.amount - totalEntered;
   return `
-    <div class="card" style="background:var(--paper);border:1px dashed var(--copper);margin:8px 0;padding:12px;">
+    <div class="card" style="background:var(--bg);border:1px dashed var(--orange);margin:8px 0;padding:12px;box-shadow:none;">
       <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:4px;">Which account received this ${fmtMoney(t.amount)} repayment?</div>
       ${rows}
       <div class="row" style="margin-top:10px;justify-content:space-between;">
@@ -867,6 +921,48 @@ function paidEditorHtml(t){
       <div class="row" style="margin-top:10px;">
         <button type="button" class="btn-ghost" id="paidCancel" style="flex:1;">Cancel</button>
         <button type="button" class="btn-primary" id="paidConfirm" style="flex:1;">Confirm paid</button>
+      </div>
+    </div>`;
+}
+
+/* ---- part-paid split editor state (my part of a split bill -> deposit wallet) ---- */
+let openPartEditorTxId = null;
+let partEditorSplits = [];
+
+function openPartEditor(t){
+  openPartEditorTxId = t.id;
+  openPaidEditorTxId = null; paidEditorSplits = [];
+  const firstCash = state.accounts.find(a => !a.isCredit && a.id !== 'deposit-wallet');
+  partEditorSplits = [{ accountId: firstCash ? firstCash.id : '', amount: splitBillMyPart(t) }];
+  renderSplitBill();
+}
+function closePartEditor(){
+  openPartEditorTxId = null;
+  partEditorSplits = [];
+  renderSplitBill();
+}
+function partEditorHtml(t){
+  const target = splitBillMyPart(t);
+  const rows = partEditorSplits.map((sp, i) => `
+    <div class="row" data-part-split-row="${i}" style="margin-top:8px;">
+      <select data-part-split-account="${i}">${cashAccountOptions(sp.accountId)}</select>
+      <input type="text" inputmode="numeric" class="num-input money-input part-split-amount-input"
+        data-part-split-amount="${i}" value="${formatMoneyInputValue(sp.amount)}" placeholder="Amount" />
+      ${partEditorSplits.length > 1 ? `<button class="btn-icon" data-part-split-remove="${i}" aria-label="Remove split">✕</button>` : ''}
+    </div>`).join('');
+  const totalEntered = partEditorSplits.reduce((s,sp)=>s+(sp.amount||0),0);
+  const diff = target - totalEntered;
+  return `
+    <div class="card" style="background:var(--bg);border:1px dashed var(--orange);margin:8px 0;padding:12px;box-shadow:none;">
+      <div style="font-size:12.5px;color:var(--ink-soft);margin-bottom:4px;">Which account pays your ${fmtMoney(target)} part?</div>
+      ${rows}
+      <div class="row" style="margin-top:10px;justify-content:space-between;">
+        <button type="button" class="btn-ghost" id="partAddSplit" style="font-size:12px;padding:7px 10px;">+ Split with another bank</button>
+        <span style="font-size:11.5px;color:${diff===0?'var(--ink-soft)':'var(--wax)'};">${diff===0?'Matches total':'Remaining: ' + fmtMoney(diff)}</span>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <button type="button" class="btn-ghost" id="partCancel" style="flex:1;">Cancel</button>
+        <button type="button" class="btn-primary" id="partConfirm" style="flex:1;">Confirm paid</button>
       </div>
     </div>`;
 }
@@ -1018,7 +1114,7 @@ function txRowHtml(t, opts={}){
 
 /* ---------------- me tab ---------------- */
 function renderMe(){
-  const meTx = state.tx.filter(t => t.kind === 'expense' && (t.who === 'Me' || (t.who === 'Split Bill' && t.myPartTag !== 'Together' && t.myPartPaid)));
+  const meTx = state.tx.filter(t => t.kind === 'expense' && (t.who === 'Me' || (t.who === 'Split Bill' && t.myPartTag !== 'Together' && splitBillMyPart(t) > 0)));
   const now = new Date();
   const { start, end } = monthRange(now);
   const spentThisMonth = meTx.filter(t => {
@@ -1056,7 +1152,7 @@ function renderTogether(){
 
   const now = new Date();
   const { start, end } = monthRange(now);
-  const togetherTx = state.tx.filter(t => t.kind === 'expense' && (t.who === 'Together' || (t.who === 'Split Bill' && t.myPartTag === 'Together' && t.myPartPaid)));
+  const togetherTx = state.tx.filter(t => t.kind === 'expense' && (t.who === 'Together' || (t.who === 'Split Bill' && t.myPartTag === 'Together' && splitBillMyPart(t) > 0)));
   const spentThisMonth = togetherTx.filter(t => {
     const d = new Date(t.date + 'T00:00:00');
     return d >= start && d <= end;
@@ -1106,7 +1202,10 @@ function splitBillRowHtml(t){
   const acctName = acct ? escapeHtml(acct.name) : '';
   const myPart = splitBillMyPart(t);
   const ccBadge = (t.accountId === 'credit-card')
-    ? `<span class="paid-chip ${t.paid ? 'paid' : 'unpaid'}" style="cursor:default;">${t.paid ? 'Paid' : 'Unpaid'}</span>` : '';
+    ? `<button class="paid-chip ${t.paid ? 'paid' : 'unpaid'}" data-toggle-paid="${t.id}">${t.paid ? 'Paid' : 'Unpaid'}</button>` : '';
+  const editors =
+    (openPaidEditorTxId === t.id ? paidEditorHtml(t) : '') +
+    (openPartEditorTxId === t.id ? partEditorHtml(t) : '');
   return `
     <div class="tx" style="flex-direction:column;align-items:stretch;">
       <div class="row" style="justify-content:space-between;align-items:flex-start;">
@@ -1137,6 +1236,7 @@ function splitBillRowHtml(t){
         </div>
         <button class="paid-chip ${t.myPartPaid ? 'paid' : 'unpaid'}" data-toggle-mypart-paid="${t.id}">${t.myPartPaid ? 'Part paid' : 'Part unpaid'}</button>
       </div>
+      ${editors}
     </div>`;
 }
 function renderSplitBill(){
@@ -1157,6 +1257,20 @@ document.getElementById('splitBillList').addEventListener('input', e => {
   if (e.target.matches('.split-mypart-input')){
     const digits = e.target.value.replace(/[^0-9]/g,'');
     e.target.value = digits ? parseInt(digits,10).toLocaleString('en-US') : '';
+    return;
+  }
+  if (e.target.matches('.split-amount-input')){
+    const idx = parseInt(e.target.dataset.splitAmount, 10);
+    const digits = e.target.value.replace(/[^0-9]/g,'');
+    e.target.value = digits ? parseInt(digits,10).toLocaleString('en-US') : '';
+    if (paidEditorSplits[idx]) paidEditorSplits[idx].amount = digits ? parseInt(digits,10) : 0;
+    return;
+  }
+  if (e.target.matches('.part-split-amount-input')){
+    const idx = parseInt(e.target.dataset.partSplitAmount, 10);
+    const digits = e.target.value.replace(/[^0-9]/g,'');
+    e.target.value = digits ? parseInt(digits,10).toLocaleString('en-US') : '';
+    if (partEditorSplits[idx]) partEditorSplits[idx].amount = digits ? parseInt(digits,10) : 0;
   }
 });
 document.getElementById('splitBillList').addEventListener('change', e => {
@@ -1172,27 +1286,227 @@ document.getElementById('splitBillList').addEventListener('change', e => {
     const t = state.tx.find(x => x.id === tagId);
     if (t) t.myPartTag = e.target.value;
     persist(); renderAll();
+    return;
+  }
+  if (e.target.matches('[data-split-account]')){
+    const idx = parseInt(e.target.dataset.splitAccount, 10);
+    if (paidEditorSplits[idx]) paidEditorSplits[idx].accountId = e.target.value;
+    return;
+  }
+  if (e.target.matches('[data-part-split-account]')){
+    const idx = parseInt(e.target.dataset.partSplitAccount, 10);
+    if (partEditorSplits[idx]) partEditorSplits[idx].accountId = e.target.value;
   }
 });
 document.getElementById('splitBillList').addEventListener('click', e => {
   const delId = e.target.closest('[data-del-tx]')?.dataset.delTx;
   const settleId = e.target.closest('[data-toggle-settled]')?.dataset.toggleSettled;
   const partPaidId = e.target.closest('[data-toggle-mypart-paid]')?.dataset.toggleMypartPaid;
+  const ccPaidId = e.target.closest('[data-toggle-paid]')?.dataset.togglePaid;
+  const removeIdx = e.target.closest('[data-split-remove]')?.dataset.splitRemove;
+  const partRemoveIdx = e.target.closest('[data-part-split-remove]')?.dataset.partSplitRemove;
+
+  /* CC paid chip (same behavior as Transaction tab) */
+  if (ccPaidId){
+    const t = state.tx.find(x => x.id === ccPaidId);
+    if (!t) return;
+    if (t.paid){
+      t.paid = false;
+      delete t.paidSplits;
+      persist(); renderAll();
+    } else {
+      openPartEditorTxId = null; partEditorSplits = [];
+      openPaidEditor(t);
+      renderSplitBill();
+    }
+    return;
+  }
+  if (e.target.id === 'paidAddSplit'){
+    const firstCash = state.accounts.find(a => !a.isCredit && a.id !== 'deposit-wallet');
+    paidEditorSplits.push({ accountId: firstCash ? firstCash.id : '', amount: 0 });
+    renderSplitBill(); renderFinance();
+    return;
+  }
+  if (removeIdx !== undefined){
+    paidEditorSplits.splice(parseInt(removeIdx,10), 1);
+    renderSplitBill(); renderFinance();
+    return;
+  }
+  if (e.target.id === 'paidCancel'){
+    openPaidEditorTxId = null; paidEditorSplits = [];
+    renderSplitBill(); renderFinance();
+    return;
+  }
+  if (e.target.id === 'paidConfirm'){
+    const t = state.tx.find(x => x.id === openPaidEditorTxId);
+    const splits = paidEditorSplits.filter(sp => sp.amount > 0 && sp.accountId);
+    if (t && splits.length){
+      t.paid = true;
+      t.paidSplits = splits.map(sp => ({ accountId: sp.accountId, amount: sp.amount }));
+    }
+    openPaidEditorTxId = null; paidEditorSplits = [];
+    persist(); renderAll();
+    return;
+  }
+
+  /* Part paid chip -> opens part editor, confirms into deposit wallet */
+  if (partPaidId){
+    const t = state.tx.find(x => x.id === partPaidId);
+    if (!t) return;
+    if (t.myPartPaid){
+      t.myPartPaid = false;
+      delete t.myPartSplits;
+      persist(); renderAll();
+    } else {
+      if (splitBillMyPart(t) <= 0) return; // set my part first
+      openPartEditor(t);
+    }
+    return;
+  }
+  if (e.target.id === 'partAddSplit'){
+    const firstCash = state.accounts.find(a => !a.isCredit && a.id !== 'deposit-wallet');
+    partEditorSplits.push({ accountId: firstCash ? firstCash.id : '', amount: 0 });
+    renderSplitBill();
+    return;
+  }
+  if (partRemoveIdx !== undefined){
+    partEditorSplits.splice(parseInt(partRemoveIdx,10), 1);
+    renderSplitBill();
+    return;
+  }
+  if (e.target.id === 'partCancel'){ closePartEditor(); return; }
+  if (e.target.id === 'partConfirm'){
+    const t = state.tx.find(x => x.id === openPartEditorTxId);
+    const splits = partEditorSplits.filter(sp => sp.amount > 0 && sp.accountId);
+    if (t && splits.length){
+      t.myPartPaid = true;
+      t.myPartSplits = splits.map(sp => ({ accountId: sp.accountId, amount: sp.amount }));
+    }
+    openPartEditorTxId = null; partEditorSplits = [];
+    persist(); renderAll();
+    return;
+  }
+
   if (settleId){
     const t = state.tx.find(x => x.id === settleId);
     if (t) t.settled = !t.settled;
     persist(); renderAll();
     return;
   }
-  if (partPaidId){
-    const t = state.tx.find(x => x.id === partPaidId);
-    if (t) t.myPartPaid = !t.myPartPaid;
-    persist(); renderAll();
-    return;
-  }
   if (!delId) return;
   state.tx = state.tx.filter(t => t.id !== delId);
   persist(); renderAll();
+});
+
+/* ---------------- manage accounts & categories ---------------- */
+const PROTECTED_ACCOUNTS = ['deposit-wallet', 'credit-card'];
+function accountReferenced(id){
+  return state.tx.some(t =>
+    t.accountId === id ||
+    t.toAccountId === id ||
+    (Array.isArray(t.paidSplits) && t.paidSplits.some(sp => sp.accountId === id)) ||
+    (Array.isArray(t.myPartSplits) && t.myPartSplits.some(sp => sp.accountId === id))
+  );
+}
+function categoryReferenced(name){
+  return state.tx.some(t => t.category === name);
+}
+function renderManageAccounts(){
+  const list = document.getElementById('mngAcctList');
+  list.innerHTML = state.accounts.map(a => {
+    const protectedAcct = PROTECTED_ACCOUNTS.includes(a.id);
+    return `
+    <div class="row" style="margin-top:8px;">
+      <input type="text" data-mng-acct-name="${a.id}" value="${escapeHtml(a.name)}" />
+      ${a.isCredit ? '<span style="font-size:10px;color:var(--orange);font-weight:700;text-transform:uppercase;">Credit</span>' : ''}
+      ${protectedAcct ? '' : `<button class="btn-icon" data-mng-acct-del="${a.id}" aria-label="Delete account">✕</button>`}
+    </div>`;
+  }).join('');
+}
+function renderManageCategories(){
+  const list = document.getElementById('mngCatList');
+  list.innerHTML = state.categories.map((c, i) => `
+    <div class="row" style="margin-top:8px;">
+      <input type="text" data-mng-cat-idx="${i}" value="${escapeHtml(c)}" />
+      <button class="btn-icon" data-mng-cat-del="${i}" aria-label="Delete category">✕</button>
+    </div>`).join('');
+}
+document.getElementById('mngAcctList').addEventListener('change', e => {
+  const id = e.target.dataset.mngAcctName;
+  if (!id) return;
+  const acct = accountById(id);
+  const name = e.target.value.trim();
+  if (!name){ renderManageAccounts(); return; }
+  acct.name = name;
+  persist(); populateSelects(); renderAll();
+});
+document.getElementById('mngAcctList').addEventListener('click', e => {
+  const id = e.target.closest('[data-mng-acct-del]')?.dataset.mngAcctDel;
+  if (!id) return;
+  if (accountReferenced(id)){
+    alert('This account has transactions, so it can\'t be deleted. Delete or reassign its transactions first.');
+    return;
+  }
+  state.accounts = state.accounts.filter(a => a.id !== id);
+  persist(); populateSelects(); renderAll();
+});
+document.getElementById('newAcctAdd').addEventListener('click', () => {
+  const name = document.getElementById('newAcctName').value.trim();
+  if (!name) return;
+  if (state.accounts.some(a => a.name.toLowerCase() === name.toLowerCase())){
+    alert('An account with that name already exists.');
+    return;
+  }
+  const isCredit = document.getElementById('newAcctType').value === 'credit';
+  const newAcct = { id: 'acct-' + uid(), name, isCredit, startingBalance: 0 };
+  const depIdx = state.accounts.findIndex(a => a.id === 'deposit-wallet');
+  if (depIdx >= 0) state.accounts.splice(depIdx, 0, newAcct);
+  else state.accounts.push(newAcct);
+  document.getElementById('newAcctName').value = '';
+  persist(); populateSelects(); renderAll();
+});
+document.getElementById('mngCatList').addEventListener('change', e => {
+  const idx = e.target.dataset.mngCatIdx;
+  if (idx === undefined) return;
+  const i = parseInt(idx, 10);
+  const oldName = state.categories[i];
+  const newName = e.target.value.trim();
+  if (!newName || newName === oldName){ renderManageCategories(); return; }
+  if (state.categories.some((c, j) => j !== i && c.toLowerCase() === newName.toLowerCase())){
+    alert('A category with that name already exists.');
+    renderManageCategories();
+    return;
+  }
+  state.categories[i] = newName;
+  state.tx.forEach(t => { if (t.category === oldName) t.category = newName; });
+  persist(); populateSelects(); renderAll();
+});
+document.getElementById('mngCatList').addEventListener('click', e => {
+  const idx = e.target.closest('[data-mng-cat-del]')?.dataset.mngCatDel;
+  if (idx === undefined) return;
+  const i = parseInt(idx, 10);
+  const name = state.categories[i];
+  if (state.categories.length <= 1){
+    alert('You need at least one category.');
+    return;
+  }
+  if (categoryReferenced(name)){
+    alert('This category has transactions, so it can\'t be deleted. Reassign or delete those transactions first.');
+    return;
+  }
+  state.categories.splice(i, 1);
+  persist(); populateSelects(); renderAll();
+});
+document.getElementById('newCatAdd').addEventListener('click', () => {
+  const name = document.getElementById('newCatName').value.trim();
+  if (!name) return;
+  if (state.categories.some(c => c.toLowerCase() === name.toLowerCase())){
+    alert('A category with that name already exists.');
+    return;
+  }
+  state.categories.push(name);
+  document.getElementById('newCatName').value = '';
+  persist(); populateSelects(); renderAll();
 });
 
 /* ---------------- export ---------------- */
@@ -1260,6 +1574,8 @@ function renderAll(){
   renderMe();
   renderTogether();
   renderSplitBill();
+  renderManageAccounts();
+  renderManageCategories();
   populateExportMonths();
 }
 renderAll();
