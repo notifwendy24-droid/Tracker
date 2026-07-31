@@ -1,4 +1,4 @@
-const CACHE_NAME = "ledger-cache-v1";
+const CACHE_NAME = "ledger-cache-v2";
 const ASSETS = [
   "./",
   "./index.html",
@@ -26,16 +26,36 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request)
+
+  const url = new URL(event.request.url);
+  const isHTML =
+    event.request.mode === "navigate" ||
+    url.pathname.endsWith("/") ||
+    url.pathname.endsWith(".html");
+
+  if (isHTML) {
+    // Network-first for the app itself: always get the latest version when online,
+    // fall back to cache when offline.
+    event.respondWith(
+      fetch(event.request)
         .then((response) => {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
           return response;
         })
-        .catch(() => cached);
-    })
-  );
+        .catch(() => caches.match(event.request))
+    );
+  } else {
+    // Cache-first for static assets (icons, manifest).
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        if (cached) return cached;
+        return fetch(event.request).then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+          return response;
+        });
+      })
+    );
+  }
 });
